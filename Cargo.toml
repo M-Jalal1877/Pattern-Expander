@@ -9,8 +9,10 @@ description = "Pattern fill -> Expand -> Crop vector tool, in millimeters"
 name = "pattern_expander"
 path = "src/lib.rs"
 
+# The executable: builds to "Acme-Engineering-Hatching.exe" (Cargo does not allow
+# spaces here; build-release.ps1 produces "Acme Engineering Hatching.exe").
 [[bin]]
-name = "pattern-expander"
+name = "Acme-Engineering-Hatching"
 path = "src/main.rs"
 
 [dependencies]

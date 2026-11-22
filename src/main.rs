@@ -14,7 +14,7 @@ fn main() -> eframe::Result {
         ..Default::default()
     };
     eframe::run_native(
-        "Pattern Expander",
+        "Acme Engineering Hatching",
         options,
         Box::new(|cc| Ok(Box::new(pattern_expander::app::PatternExpanderApp::new(cc)))),
     )

@@ -24,6 +24,15 @@ cargo test           # unit tests
 cargo clippy --all-targets
 ```
 
+The executable is `Acme-Engineering-Hatching.exe` (in `target\debug` or `target\release`).
+Cargo does not allow spaces in a binary name, so for distribution run
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\build-release.ps1
+```
+
+which builds the release version and saves it as `dist\Acme Engineering Hatching.exe`.
+
 It runs on Windows (tested), Linux and macOS. The only OS-specific code is the native
 file-dialog module in `src/io.rs` and the clipboard module in `src/clipboard.rs`.
 
