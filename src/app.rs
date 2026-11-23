@@ -1274,6 +1274,20 @@ impl PatternExpanderApp {
                 }
             }
         });
+        if let Some(dir) = io::user_presets_dir()
+            && ui
+                .button("Open patterns folder")
+                .on_hover_text(format!(
+                    "Your saved patterns are files in:\n{}\n\nCopy this folder together with the program to take them to another PC.",
+                    dir.display()
+                ))
+                .clicked()
+        {
+            self.status = match open_folder(&dir) {
+                Ok(()) => format!("Opened {}", dir.display()),
+                Err(e) => format!("Could not open {}: {e}", dir.display()),
+            };
+        }
     }
 
     fn persist_presets(&mut self, ok_msg: String) {
@@ -1496,6 +1510,26 @@ impl eframe::App for PatternExpanderApp {
         self.export_window(&ctx);
         self.pattern_window(&ctx);
         self.validate_selection();
+    }
+}
+
+/// Show a folder in the system file manager (created first if missing).
+fn open_folder(dir: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    #[cfg(windows)]
+    let cmd = "explorer";
+    #[cfg(target_os = "macos")]
+    let cmd = "open";
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let cmd = "xdg-open";
+    #[cfg(any(windows, unix))]
+    {
+        std::process::Command::new(cmd).arg(dir).spawn()?;
+        Ok(())
+    }
+    #[cfg(not(any(windows, unix)))]
+    {
+        Err(std::io::Error::other("not supported on this platform"))
     }
 }
 

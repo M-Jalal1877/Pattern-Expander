@@ -31,7 +31,8 @@ Cargo does not allow spaces in a binary name, so for distribution run
 powershell -ExecutionPolicy Bypass -File .\build-release.ps1
 ```
 
-which builds the release version and saves it as `dist\Acme Engineering Hatching.exe`.
+which builds the release version and saves it as `dist\Acme Engineering Hatching.exe`, next to
+a `dist\patterns` folder with your saved patterns. Copy the whole `dist` folder to another PC.
 
 It runs on Windows (tested), Linux and macOS. The only OS-specific code is the native
 file-dialog module in `src/io.rs` and the clipboard module in `src/clipboard.rs`.
@@ -216,9 +217,29 @@ cell. **Back to layout shape** switches to the layout's natural tile.
 ### Presets
 
 The preset list holds built-in presets (◆) followed by your own. **Save preset** stores the
-current pattern under a name, in `%APPDATA%\PatternExpander\presets.json` on Windows
-(`~/.config/PatternExpander/presets.json` elsewhere). **Import…** and **Export…** read and write
-preset JSON files.
+current pattern under a name. **Import…** and **Export…** read and write preset JSON files.
+
+**Where your patterns are kept:** in a `patterns` folder **next to the program**, one file per
+pattern (`Acme.1.json`, …). To take the program and all your patterns to another PC, copy the
+program's folder, i.e. the `.exe` together with `patterns`:
+
+```
+dist\
+  Acme Engineering Hatching.exe
+  patterns\
+    Acme.1.json
+```
+
+* **Open patterns folder** (in the Pattern window, under the presets) shows the folder.
+* To share one pattern, copy its file; to receive one, drop the file into `patterns`.
+* Deleting or renaming a preset in the app removes or renames its file. Other files in the folder
+  (anything that is not a pattern file) are never touched.
+* Patterns saved by earlier versions (in `%APPDATA%\PatternExpander\presets.json`) are moved
+  into the `patterns` folder automatically the first time the program starts with an empty folder.
+* Keep the program in a folder you can write to (for example not inside `C:\Program Files`),
+  otherwise new patterns cannot be saved.
+* `build-release.ps1` creates `dist\patterns` and copies in patterns you saved while running
+  from the build folders (`cargo run`).
 
 ---
 
