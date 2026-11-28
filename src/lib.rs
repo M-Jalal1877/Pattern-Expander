@@ -8,6 +8,7 @@ pub mod ai_export;
 pub mod app;
 pub mod canvas;
 pub mod clipboard;
+pub mod cut_export;
 pub mod document;
 pub mod emf_import;
 pub mod flatten;

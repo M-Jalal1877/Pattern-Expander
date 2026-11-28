@@ -264,6 +264,14 @@ pub mod dialogs {
         rfd::FileDialog::new().add_filter("SVG", &["svg"]).set_title("Import SVG").pick_file()
     }
 
+    pub fn save_cut(kind: &str, ext: &str) -> Option<PathBuf> {
+        rfd::FileDialog::new()
+            .add_filter(kind, &[ext])
+            .set_title(format!("Export {kind}"))
+            .set_file_name(format!("pattern.{ext}"))
+            .save_file()
+    }
+
     pub fn save_ai() -> Option<PathBuf> {
         rfd::FileDialog::new()
             .add_filter("Adobe Illustrator 3", &["ai"])
@@ -300,6 +308,9 @@ pub mod dialogs {
         None
     }
     pub fn save_ai() -> Option<PathBuf> {
+        None
+    }
+    pub fn save_cut(_: &str, _: &str) -> Option<PathBuf> {
         None
     }
     pub fn save_preset(_: &str) -> Option<PathBuf> {

@@ -314,6 +314,24 @@ as SVG export: only selected objects, and fit objects or the artboard as the pag
 * Strokes keep their width, join, cap and miter limit.
 * AI 3 has no RGB colour and no transparency. Colours are converted to CMYK (the plain
   conversion Illustrator uses without colour management) and drawn opaque.
+* Lines end in CR LF, as Windows programs expect.
+* **For laser / engraving software (EZCAD …)** (checkbox in the export dialog): if a file opens
+  empty in marking or cutting software with a simple AI importer, use this. It writes the most
+  basic AI 3: no PostScript prolog, no groups, no compound paths. Every outline, holes included,
+  is its own closed, stroked path in the object's colour; hatching software fills nested outlines
+  even-odd anyway.
+
+## DXF and PLT export (laser marking / cutting)
+
+Two more formats in the export dialog, for EZCAD, LightBurn, cutting plotters and CAD. Both
+carry outlines only: every ring of every shape — holes included — is one closed path in real
+millimetres, and live patterns are exported as their pieces. Marking software fills nested
+outlines even-odd, so holes stay holes.
+
+* **DXF (.dxf)**: AutoCAD R12, closed `POLYLINE`s, units mm (`$INSUNITS` 4), y up, a layer
+  per colour (`RGB_rrggbb`) with the nearest AutoCAD colour.
+* **PLT / HPGL (.plt)**: 40 plotter units per mm, every distinct colour its own pen (`SP1`,
+  `SP2` …) in order of appearance, so laser settings can be assigned per colour (EZCAD pens).
 
 ## SVG import
 

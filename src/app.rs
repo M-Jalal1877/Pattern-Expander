@@ -33,6 +33,8 @@ struct ExportDialog {
     only_selected: bool,
     bounds: SvgBounds,
     format: ExportFormat,
+    /// AI 3 for laser / engraving software (EZCAD …): plain stroked outlines.
+    laser_ai: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -40,6 +42,10 @@ enum ExportFormat {
     Svg,
     /// Adobe Illustrator 3 (.ai)
     Ai3,
+    /// AutoCAD DXF R12 (outlines, mm) — laser / CAD software
+    Dxf,
+    /// HPGL plotter file (outlines, a pen per colour) — EZCAD, cutters
+    Plt,
 }
 
 pub struct PatternExpanderApp {
@@ -63,6 +69,7 @@ pub struct PatternExpanderApp {
     project_path: Option<PathBuf>,
     export_dialog: Option<ExportDialog>,
     last_export_format: ExportFormat,
+    last_laser_ai: bool,
     /// Loading screen shown at start-up (None once it has faded out).
     splash: Option<crate::splash::Splash>,
 }
@@ -88,6 +95,7 @@ impl PatternExpanderApp {
             project_path: None,
             export_dialog: None,
             last_export_format: ExportFormat::Svg,
+            last_laser_ai: false,
             splash: Some(crate::splash::Splash::start()),
         }
     }
@@ -286,8 +294,19 @@ impl PatternExpanderApp {
             ExportFormat::Ai3 => {
                 let Some(path) = io::dialogs::save_ai() else { return };
                 let title = path.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
-                let (ai, n) = crate::ai_export::export_ai(&self.doc, &self.selection, &opts, &title);
+                let ai_opts = crate::ai_export::AiOptions { laser_compatible: self.last_laser_ai };
+                let (ai, n) = crate::ai_export::export_ai_with(&self.doc, &self.selection, &opts, &title, &ai_opts);
                 (path, ai, n)
+            }
+            ExportFormat::Dxf => {
+                let Some(path) = io::dialogs::save_cut("DXF (AutoCAD R12)", "dxf") else { return };
+                let (dxf, n) = crate::cut_export::export_dxf(&self.doc, &self.selection, &opts);
+                (path, dxf, n)
+            }
+            ExportFormat::Plt => {
+                let Some(path) = io::dialogs::save_cut("PLT (HPGL)", "plt") else { return };
+                let (plt, n) = crate::cut_export::export_plt(&self.doc, &self.selection, &opts);
+                (path, plt, n)
             }
         };
         match io::write_text(&path, &text) {
@@ -573,6 +592,7 @@ impl PatternExpanderApp {
             only_selected: !self.selection.is_empty(),
             bounds: SvgBounds::Objects,
             format,
+            laser_ai: self.last_laser_ai,
         });
     }
 
@@ -1439,6 +1459,17 @@ impl PatternExpanderApp {
                     ui.radio_value(&mut dlg.format, ExportFormat::Svg, "SVG");
                     ui.radio_value(&mut dlg.format, ExportFormat::Ai3, "Adobe Illustrator 3 (.ai)");
                 });
+                ui.horizontal(|ui| {
+                    ui.label("For laser / cutting:");
+                    ui.radio_value(&mut dlg.format, ExportFormat::Dxf, "DXF (.dxf)");
+                    ui.radio_value(&mut dlg.format, ExportFormat::Plt, "PLT / HPGL (.plt)");
+                });
+                if dlg.format == ExportFormat::Ai3 {
+                    ui.checkbox(&mut dlg.laser_ai, "For laser / engraving software (EZCAD …)").on_hover_text(
+                        "Use this if the file opens empty in EZCAD or similar marking / cutting software. \
+                         Writes only plain closed outlines, which those importers understand.",
+                    );
+                }
                 ui.add_enabled(has_sel, egui::Checkbox::new(&mut dlg.only_selected, "Only selected objects"));
                 ui.horizontal(|ui| {
                     ui.label("Page:");
@@ -1447,6 +1478,18 @@ impl PatternExpanderApp {
                 });
                 ui.weak(match dlg.format {
                     ExportFormat::Svg => "Size is written in mm (1 SVG unit = 1 mm); every piece is its own <path>.",
+                    ExportFormat::Dxf => {
+                        "AutoCAD R12 DXF: every outline (holes too) is a closed polyline in millimetres, a layer per \
+                         colour. Read by EZCAD, LightBurn, CAD and most laser / cutting software."
+                    }
+                    ExportFormat::Plt => {
+                        "HPGL plotter file: every outline a closed path, 40 units per mm, each colour its own pen \
+                         (SP1, SP2 …) so laser settings can be set per colour. Classic EZCAD / CorelDRAW format."
+                    }
+                    ExportFormat::Ai3 if dlg.laser_ai => {
+                        "Plain AI 3 for laser / engraving software: every outline (holes too) is a separate closed, \
+                         stroked path in the object's colour; no groups, no compound paths, no PostScript prolog."
+                    }
                     ExportFormat::Ai3 => {
                         "Classic Illustrator 3 format (also valid EPS): exact size in points, every piece its own path, \
                          holes as compound paths. AI 3 has no RGB or transparency: colours are converted to CMYK."
@@ -1459,6 +1502,7 @@ impl PatternExpanderApp {
             });
         if go {
             let (only, bounds, format) = (dlg.only_selected && has_sel, dlg.bounds, dlg.format);
+            self.last_laser_ai = dlg.laser_ai;
             self.export_dialog = None;
             self.last_export_format = format;
             self.export(only, bounds, format);

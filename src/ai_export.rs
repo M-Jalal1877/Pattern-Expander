@@ -88,12 +88,23 @@ pub fn rgb_to_cmyk(c: Color) -> [f64; 4] {
     [(1.0 - r - k) / d, (1.0 - g - k) / d, (1.0 - b - k) / d, k]
 }
 
+/// Options for the AI 3 writer.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct AiOptions {
+    /// Most basic AI 3, for laser / engraving / cutting software with simple
+    /// importers (EZCAD and similar): no PostScript prolog, no groups, no
+    /// compound paths; every outline is its own closed, stroked path (holes are
+    /// simply further outlines, which hatching software fills even-odd anyway).
+    pub laser_compatible: bool,
+}
+
 struct Writer<'a> {
     doc: &'a Document,
     out: String,
     /// Page (mm): x0, y0, x1, y1 — mapped to (0, 0)…(w, h) points.
     page: Bounds,
     paths: usize,
+    simple: bool,
 }
 
 impl Writer<'_> {
@@ -184,6 +195,20 @@ impl Writer<'_> {
         if rings.is_empty() {
             return;
         }
+        if self.simple {
+            // Laser-compatible: each outline is a separate closed, stroked path in
+            // the object's colour (fill colour, else stroke colour).
+            let Some(c) = fill.or_else(|| style.and_then(|s| s.stroke)) else { return };
+            let [cc, m, y, k] = rgb_to_cmyk(c);
+            let _ = writeln!(self.out, "{} {} {} {} K", num(cc), num(m), num(y), num(k));
+            self.out.push_str("0.25 w\n");
+            for (r, outer) in rings {
+                if self.ring(r, outer, "s") {
+                    self.paths += 1;
+                }
+            }
+            return;
+        }
         let Some(op) = self.paint_state(fill, style) else { return };
         let compound = rings.len() > 1;
         if compound {
@@ -208,14 +233,14 @@ impl Writer<'_> {
             None => self.path(&geom.0, s.style.fill, Some(&s.style)),
             Some(fill) => {
                 // A live pattern fill is exported exactly as previewed: expanded pieces.
-                self.out.push_str("u\n");
+                self.group_start();
                 if fill.keep_background {
                     self.path(&geom.0, s.style.fill, Some(&s.style));
                 }
                 for p in pattern_pieces(s, &self.doc.settings, false).pieces {
                     self.path(std::slice::from_ref(&p.poly), Some(p.color), None);
                 }
-                self.out.push_str("U\n");
+                self.group_end();
             }
         }
     }
@@ -224,23 +249,48 @@ impl Writer<'_> {
         match &o.kind {
             ObjectKind::Shape(s) => self.shape(s),
             ObjectKind::Group(children) => {
-                self.out.push_str("u\n");
+                self.group_start();
                 for c in children.iter() {
                     self.object(c);
                 }
-                self.out.push_str("U\n");
+                self.group_end();
             }
+        }
+    }
+
+    fn group_start(&mut self) {
+        if !self.simple {
+            self.out.push_str("u\n");
+        }
+    }
+
+    fn group_end(&mut self) {
+        if !self.simple {
+            self.out.push_str("U\n");
         }
     }
 }
 
 /// Build the AI 3 file text. Returns the text and the number of paths written.
-/// `title` goes into the header (usually the file name).
+/// `title` goes into the header (usually the file name). Lines end in CR LF,
+/// as Windows programs (and their AI importers) expect.
 pub fn export_ai(doc: &Document, selection: &[ObjId], opts: &SvgOptions, title: &str) -> (String, usize) {
+    export_ai_with(doc, selection, opts, title, &AiOptions::default())
+}
+
+/// [`export_ai`] with AI-specific options.
+pub fn export_ai_with(
+    doc: &Document,
+    selection: &[ObjId],
+    opts: &SvgOptions,
+    title: &str,
+    ai: &AiOptions,
+) -> (String, usize) {
     let objs = export_objects(doc, selection, opts);
     let page = export_page(doc, &objs, opts.bounds);
     let (w, h) = ((page[2] - page[0]) * PT_PER_MM, (page[3] - page[1]) * PT_PER_MM);
-    let mut wr = Writer { doc, out: String::new(), page, paths: 0 };
+    let simple = ai.laser_compatible;
+    let mut wr = Writer { doc, out: String::new(), page, paths: 0, simple };
 
     // Header. The Creator line is how AI 3 files identify their format to
     // importers (Illustrator, CorelDRAW, cutting software).
@@ -254,26 +304,32 @@ pub fn export_ai(doc: &Document, selection: &[ObjId], opts: &SvgOptions, title: 
          %%HiResBoundingBox:0 0 {w} {h}\n\
          %%DocumentProcessColors:Cyan Magenta Yellow Black\n\
          %%DocumentFonts:\n\
-         %%DocumentSuppliedResources: procset PatternExpander_AI3 1.0 0\n\
+         {resources}\
          %%TemplateBox:0 0 {wc} {hc}\n\
          %%TileBox:0 0 {wc} {hc}\n\
-         %%EndComments\n\
-         % Written by Pattern Expander. Units: points; 1 mm = 72/25.4 pt.\n",
+         %%EndComments\n",
         for_ = ps_string("Pattern Expander"),
         title = ps_string(title),
         wc = w.ceil() as i64,
         hc = h.ceil() as i64,
         w = num(w),
         h = num(h),
+        resources = if simple { "" } else { "%%DocumentSuppliedResources: procset PatternExpander_AI3 1.0 0\n" },
     );
-    wr.out.push_str(PROLOG);
-    wr.out.push_str("%%BeginSetup\nPE_AI3 begin\n%%EndSetup\n");
+    if simple {
+        wr.out.push_str("%%EndProlog\n%%BeginSetup\n%%EndSetup\n");
+    } else {
+        wr.out.push_str("% Written by Pattern Expander. Units: points; 1 mm = 72/25.4 pt.\n");
+        wr.out.push_str(PROLOG);
+        wr.out.push_str("%%BeginSetup\nPE_AI3 begin\n%%EndSetup\n");
+    }
     for o in objs {
         wr.object(o);
     }
-    wr.out.push_str("%%PageTrailer\n%%Trailer\nend\n%%EOF\n");
+    wr.out.push_str(if simple { "%%PageTrailer\n%%Trailer\n%%EOF\n" } else { "%%PageTrailer\n%%Trailer\nend\n%%EOF\n" });
     let n = wr.paths;
-    (wr.out, n)
+    // Windows line endings throughout.
+    (wr.out.replace('\n', "\r\n"), n)
 }
 
 #[cfg(test)]
@@ -283,6 +339,72 @@ mod tests {
     use crate::pattern::{Layout, Pattern, PatternFill};
     use crate::shapes::{ShapeGeom, Transform};
     use crate::svg_export::SvgBounds;
+
+    /// Export with LF line endings (the tests compare text line by line).
+    fn export_lf(doc: &Document, opts: &SvgOptions) -> (String, usize) {
+        let (ai, n) = export_ai(doc, &[], opts, "test.ai");
+        (ai.replace("\r\n", "\n"), n)
+    }
+
+    /// Every line ends in CR LF (Windows importers such as EZCAD expect it).
+    #[test]
+    fn lines_end_in_crlf() {
+        let mut doc = Document::default();
+        doc.add_shape("r", ShapeObj::new(ShapeGeom::Rect, Transform::new(10.0, 10.0, 10.0, 10.0), Style::default()));
+        for ai in [AiOptions::default(), AiOptions { laser_compatible: true }] {
+            let (text, _) = export_ai_with(&doc, &[], &SvgOptions::default(), "x", &ai);
+            let bare_lf = text.bytes().enumerate().filter(|&(i, b)| b == b'\n' && (i == 0 || text.as_bytes()[i - 1] != b'\r'));
+            assert_eq!(bare_lf.count(), 0);
+            assert!(text.ends_with("%%EOF\r\n"));
+        }
+    }
+
+    /// Laser-compatible AI: no prolog, groups or compound paths; every outline a
+    /// separate closed, stroked path (holes included), corners intact.
+    #[test]
+    fn laser_compatible_is_plain_outlines() {
+        let mut doc = Document::default();
+        let mut s = ShapeObj::new(ShapeGeom::Rect, Transform::new(50.0, 50.0, 60.0, 60.0), Style::default());
+        s.pattern = Some(PatternFill::new(
+            Pattern { layout: Layout::Honeycomb, cell_size: 10.0, gap: 1.0, ..Pattern::default() },
+            &s.xf,
+        ));
+        let id = doc.add_shape("hex", s);
+        doc.apply_patterns(&[id]);
+        let ring = |x0: f64, y0: f64, x1: f64, y1: f64| vec![[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+        let frame = ShapeGeom::Custom {
+            polys: std::sync::Arc::new(vec![crate::shapes::Rings {
+                exterior: ring(-10.0, -10.0, 10.0, 10.0),
+                holes: vec![ring(-5.0, -5.0, 5.0, 5.0)],
+            }]),
+            base_w: 20.0,
+            base_h: 20.0,
+        };
+        doc.add_shape("frame", ShapeObj::new(frame, Transform::new(150.0, 50.0, 20.0, 20.0), Style::default()));
+
+        let (ai, n) = export_ai_with(&doc, &[], &SvgOptions::default(), "x", &AiOptions { laser_compatible: true });
+        let ai = ai.replace("\r\n", "\n");
+        for banned in ["\nu\n", "\nU\n", "*u", "*U", "PE_AI3", "%%BeginResource", "\nf\n", "\nb\n"] {
+            assert!(!ai.contains(banned), "laser mode must not contain {banned:?}");
+        }
+        assert!(ai.contains("%%EndProlog") && ai.contains("%%EndSetup"));
+        assert_eq!(ai.matches("\ns\n").count(), n, "one stroked, closed path per outline");
+        // Every path closed back to its start; whole hexagons keep 6 corners.
+        let mut paths: Vec<Vec<String>> = Vec::new();
+        for l in ai.lines() {
+            let t: Vec<&str> = l.split_whitespace().collect();
+            match t.as_slice() {
+                [x, y, "m"] => paths.push(vec![format!("{x} {y}")]),
+                [x, y, "l"] => paths.last_mut().unwrap().push(format!("{x} {y}")),
+                _ => {}
+            }
+        }
+        assert_eq!(paths.len(), n);
+        assert!(paths.iter().all(|p| p.first() == p.last()));
+        assert!(paths.iter().filter(|p| p.len() == 7).count() > 10, "hexagons: 6 corners + closing point");
+        // The frame's hole is just another outline (outer + hole = 2 paths of 5 points).
+        assert!(paths.iter().filter(|p| p.len() == 5).count() >= 2);
+    }
 
     fn nums_before(text: &str, op: &str) -> Vec<Vec<f64>> {
         text.lines()
@@ -296,7 +418,7 @@ mod tests {
         let mut doc = Document::default();
         let style = Style { fill: Some(Color::rgb(255, 0, 0)), stroke: None, ..Style::default() };
         doc.add_shape("r", ShapeObj::new(ShapeGeom::Rect, Transform::new(60.0, 70.0, 50.0, 20.0), style));
-        let (ai, n) = export_ai(&doc, &[], &SvgOptions::default(), "test.ai");
+        let (ai, n) = export_lf(&doc, &SvgOptions::default());
         assert_eq!(n, 1);
         assert!(ai.starts_with("%!PS-Adobe-2.0 EPSF-1.2\n%%Creator:Adobe Illustrator(TM) 3.2"));
         assert!(ai.contains("%%HiResBoundingBox:0 0 141.7323 56.6929"), "50 × 20 mm in pt");
@@ -329,7 +451,7 @@ mod tests {
         let style = Style { stroke_width: 1.0, line_join: LineJoin::Round, ..Style::default() };
         doc.add_shape("frame", ShapeObj::new(geom, Transform::new(10.0, 10.0, 20.0, 20.0), style));
         let opts = SvgOptions { only_selected: false, bounds: SvgBounds::Artboard };
-        let (ai, _) = export_ai(&doc, &[], &opts, "x");
+        let (ai, _) = export_lf(&doc, &opts);
         assert!(ai.contains("*u\n") && ai.contains("*U\n"));
         assert!(ai.contains("2.8346 w 1 j 0 J 4 M"), "1 mm stroke, round join");
         assert_eq!(ai.matches("\nb\n").count(), 2, "fill + stroke, both rings");
@@ -366,7 +488,7 @@ mod tests {
         ));
         let id = doc.add_shape("hex", s);
         doc.apply_patterns(&[id]);
-        let (ai, _) = export_ai(&doc, &[], &SvgOptions::default(), "x");
+        let (ai, _) = export_lf(&doc, &SvgOptions::default());
 
         let mut paths: Vec<Vec<(String, String)>> = Vec::new();
         for l in ai.lines() {
@@ -401,7 +523,7 @@ mod tests {
         ));
         doc.add_shape("p", s.clone());
         let pieces = pattern_pieces(&s, &doc.settings, false).pieces.len();
-        let (ai, n) = export_ai(&doc, &[], &SvgOptions::default(), "x");
+        let (ai, n) = export_lf(&doc, &SvgOptions::default());
         assert_eq!(n, pieces);
         assert!(ai.contains("\nu\n") && ai.contains("\nU\n"));
     }
@@ -445,6 +567,11 @@ mod tests {
         let (ai, n) = export_ai(&doc, &[], &SvgOptions::default(), "sample.ai");
         std::fs::write(&path, ai).unwrap();
         println!("wrote {n} paths to {path}");
+        // The same drawing as laser-compatible AI, next to it.
+        let laser = path.replace(".ai", " (laser).ai");
+        let (ai, n) = export_ai_with(&doc, &[], &SvgOptions::default(), "sample (laser).ai", &AiOptions { laser_compatible: true });
+        std::fs::write(&laser, ai).unwrap();
+        println!("wrote {n} paths to {laser}");
     }
 
     #[test]
